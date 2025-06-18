@@ -31,6 +31,7 @@ import org.apache.arrow.vector.types.pojo.{ArrowType, Field, FieldType, Schema}
 import org.apache.spark.{SparkException, SparkUnsupportedOperationException}
 import org.apache.spark.sql.types._
 
+import java.util
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -56,14 +57,15 @@ object LanceArrowUtils {
       timeZoneId: String,
       errorOnDuplicatedFieldNames: Boolean,
       largeVarTypes: Boolean = false): Schema = {
-    new Schema(schema.map { field =>
-      toArrowField(
-        field.name,
-        deduplicateFieldNames(field.dataType, errorOnDuplicatedFieldNames),
-        field.nullable,
-        timeZoneId,
-        largeVarTypes)
-    }.asJava)
+    new Schema(
+      schema.map { field =>
+        toArrowField(
+          field.name,
+          deduplicateFieldNames(field.dataType, errorOnDuplicatedFieldNames),
+          field.nullable,
+          timeZoneId,
+          largeVarTypes)
+      }.asJava)
   }
 
   def toArrowField(
@@ -72,15 +74,21 @@ object LanceArrowUtils {
       nullable: Boolean,
       timeZoneId: String,
       largeVarTypes: Boolean = false): Field = {
+    val metadata = Map(
+      "lance-encoding:compression" -> "zstd",
+      "lance-encoding:compression-level" -> "3",
+      "lance-encoding:structural-encoding" -> "miniblock",
+      "lance-encoding:packed" -> "true").asJava
+
     dt match {
       case ArrayType(elementType, containsNull) =>
-        val fieldType = new FieldType(nullable, ArrowType.List.INSTANCE, null)
+        val fieldType = new FieldType(nullable, ArrowType.List.INSTANCE, null, metadata)
         new Field(
           name,
           fieldType,
           Seq(toArrowField("element", elementType, containsNull, timeZoneId, largeVarTypes)).asJava)
       case StructType(fields) =>
-        val fieldType = new FieldType(nullable, ArrowType.Struct.INSTANCE, null)
+        val fieldType = new FieldType(nullable, ArrowType.Struct.INSTANCE, null, metadata)
         new Field(
           name,
           fieldType,
@@ -88,7 +96,7 @@ object LanceArrowUtils {
             toArrowField(field.name, field.dataType, field.nullable, timeZoneId, largeVarTypes)
           }.toSeq.asJava)
       case MapType(keyType, valueType, valueContainsNull) =>
-        val mapType = new FieldType(nullable, new ArrowType.Map(false), null)
+        val mapType = new FieldType(nullable, new ArrowType.Map(false), null, metadata)
         // Note: Map Type struct can not be null, Struct Type key field can not be null
         new Field(
           name,
@@ -105,7 +113,11 @@ object LanceArrowUtils {
         toArrowField(name, udt.sqlType, nullable, timeZoneId, largeVarTypes)
       case dataType =>
         val fieldType =
-          new FieldType(nullable, toArrowType(dataType, timeZoneId, largeVarTypes, name), null)
+          new FieldType(
+            nullable,
+            toArrowType(dataType, timeZoneId, largeVarTypes, name),
+            null,
+            metadata)
         new Field(name, fieldType, Seq.empty[Field].asJava)
     }
   }
