@@ -22,6 +22,7 @@ import java.util.Map;
 public class SparkOptions {
   private static final String ak = "access_key_id";
   private static final String sk = "secret_access_key";
+  private static final String token = "session_token";
   private static final String endpoint = "aws_endpoint";
   private static final String region = "aws_region";
   private static final String virtual_hosted_style = "virtual_hosted_style_request";
@@ -79,9 +80,16 @@ public class SparkOptions {
   private static Map<String, String> genStorageOptions(LanceConfig config) {
     Map<String, String> maps = config.getOptions();
     Map<String, String> storageOptions = new HashMap<>();
-    if (maps.containsKey(ak) && maps.containsKey(sk) && maps.containsKey(endpoint)) {
+    if (maps.containsKey(ak)) {
       storageOptions.put(ak, maps.get(ak));
+    }
+    if (maps.containsKey(sk)) {
       storageOptions.put(sk, maps.get(sk));
+    }
+    if (maps.containsKey(token)) {
+      storageOptions.put(token, maps.get(token));
+    }
+    if (maps.containsKey(endpoint)) {
       storageOptions.put(endpoint, maps.get(endpoint));
     }
     if (maps.containsKey(region)) {
