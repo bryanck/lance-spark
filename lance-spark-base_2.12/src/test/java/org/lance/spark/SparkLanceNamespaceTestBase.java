@@ -694,6 +694,44 @@ public abstract class SparkLanceNamespaceTestBase {
         () -> catalog.loadTable(Identifier.of(new String[] {"default"}, "non_existent_table")));
   }
 
+  @Test
+  public void testRenameTable() {
+    String origTableName = generateTableName("orig_table");
+    String newTableName = generateTableName("renamed_table");
+
+    // Create table using Spark SQL
+    spark.sql(
+        String.format(
+            "CREATE TABLE %s.default.%s (id BIGINT NOT NULL)", catalogName, origTableName));
+
+    // Verify table exists by querying it
+    Dataset<Row> result =
+        spark.sql(String.format("SELECT COUNT(*) FROM %s.default.%s", catalogName, origTableName));
+    assertNotNull(result);
+    assertEquals(0L, result.collectAsList().get(0).getLong(0));
+
+    // Rename table using Spark SQL
+    spark.sql(
+        String.format(
+            "ALTER TABLE %s.default.%s RENAME TO %s.default.%s",
+            catalogName, origTableName, catalogName, newTableName));
+
+    // Verify original table no longer exists
+    assertThrows(
+        Exception.class,
+        () -> {
+          spark
+              .sql(String.format("SELECT COUNT(*) FROM %s.default.%s", catalogName, origTableName))
+              .collectAsList();
+        });
+
+    // Verify new table exists
+    result =
+        spark.sql(String.format("SELECT COUNT(*) FROM %s.default.%s", catalogName, newTableName));
+    assertNotNull(result);
+    assertEquals(0L, result.collectAsList().get(0).getLong(0));
+  }
+
   private boolean checkDataset(int expectedSize, String tableName) {
     Dataset<Row> actual = spark.sql("SELECT * FROM " + tableName);
     List<Row> res = actual.collectAsList();

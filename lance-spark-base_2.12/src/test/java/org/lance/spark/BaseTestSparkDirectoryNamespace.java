@@ -14,6 +14,7 @@
 package org.lance.spark;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.io.File;
@@ -92,4 +93,8 @@ public abstract class BaseTestSparkDirectoryNamespace extends SparkLanceNamespac
         foundHashPrefixedDir,
         "Should find a hash-prefixed directory ending with " + expectedSuffix);
   }
+
+  @Test
+  @Disabled("DirectoryNamespace does not support renaming tables")
+  public void testRenameTable() {}
 }

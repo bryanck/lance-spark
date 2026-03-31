@@ -29,6 +29,7 @@ import org.lance.namespace.model.DropNamespaceRequest;
 import org.lance.namespace.model.DropTableRequest;
 import org.lance.namespace.model.ListTablesRequest;
 import org.lance.namespace.model.ListTablesResponse;
+import org.lance.namespace.model.RenameTableRequest;
 import org.lance.spark.function.LanceFragmentIdWithDefaultFunction;
 import org.lance.spark.utils.Optional;
 import org.lance.spark.utils.SchemaConverter;
@@ -719,7 +720,26 @@ public abstract class BaseLanceNamespaceSparkCatalog
   @Override
   public void renameTable(Identifier oldIdent, Identifier newIdent)
       throws NoSuchTableException, TableAlreadyExistsException {
-    throw new UnsupportedOperationException("Table renaming is not supported");
+    // Path-based mode doesn't support renaming tables
+    if (pathBasedOnly || this.namespace == null) {
+      throw new UnsupportedOperationException(
+          "Table renaming requires namespace configuration. Use 'impl' config.");
+    }
+
+    Identifier oldTableId = transformIdentifierForApi(oldIdent);
+    Identifier newTableId = transformIdentifierForApi(newIdent);
+
+    RenameTableRequest renameRequest = new RenameTableRequest();
+    for (String part : oldTableId.namespace()) {
+      renameRequest.addIdItem(part);
+    }
+    renameRequest.addIdItem(oldTableId.name());
+    for (String part : newTableId.namespace()) {
+      renameRequest.addNewNamespaceIdItem(part);
+    }
+    renameRequest.addNewNamespaceIdItem(newTableId.name());
+
+    namespace.renameTable(renameRequest);
   }
 
   @Override
