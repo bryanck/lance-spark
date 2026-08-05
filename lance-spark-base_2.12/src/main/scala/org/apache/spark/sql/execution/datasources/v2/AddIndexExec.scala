@@ -59,11 +59,12 @@ import scala.reflect.ClassTag
  *
  * <p><b>Deferred training ({@code WITH (train=false)})</b>: commits an empty index on the driver
  * with an empty fragment bitmap (all rows appear unindexed), skipping data processing. Supported
- * for all index types; ignored for empty tables. Populate it later by re-running {@code CREATE
- * INDEX} with the same name (a full distributed build that replaces the empty index) or, for
- * incremental coverage of appended fragments, by {@code Dataset.optimizeIndices} (the SQL
- * {@code OPTIMIZE} only compacts fragments). {@code num_segments} is rejected with this option,
- * since no segmented build occurs.
+ * for all supported scalar index methods. Empty tables use the same path even when
+ * {@code train=true}, since there are no fragments to train. Populate the index later by re-running
+ * {@code CREATE INDEX} with the same name (a full distributed build that replaces the empty index)
+ * or, for incremental coverage of appended fragments, by {@code Dataset.optimizeIndices} (the SQL
+ * {@code OPTIMIZE} only compacts fragments). {@code num_segments} is rejected with
+ * {@code train=false}, since no segmented build occurs.
  *
  * <p>The following options are consumed at the Spark execution layer and are never forwarded
  * to the Lance index backend: {@code train}, {@code build_mode}, {@code rows_per_range},
@@ -106,11 +107,6 @@ case class AddIndexExec(
       }
     }
 
-    if (fragmentIds.isEmpty) {
-      // No fragments to index
-      return Seq(new GenericInternalRow(Array[Any](0L, UTF8String.fromString(indexName))))
-    }
-
     val train = IndexUtils.extractTrain(args)
     val indexType = IndexUtils.buildIndexType(method)
 
@@ -147,15 +143,14 @@ case class AddIndexExec(
       }
     }
 
-    // train=false: commit an empty index on the driver for any index type,
-    // skipping all data processing. See the class doc for how it is populated.
-    if (!train) {
+    // train=false, or an empty table: commit an empty index on the driver and skip data
+    // processing. Index and option validation above still applies to empty tables.
+    if (!train || fragmentIds.isEmpty) {
       val uuid = UUID.randomUUID()
       val dataset = Utils.openDatasetBuilder(readOptions).build()
       try {
         return commitEmptyIndex(
           dataset,
-          readOptions,
           indexName,
           indexType,
           canonicalColumns,
@@ -298,7 +293,6 @@ case class AddIndexExec(
   /** Commits an empty (untrained) index on the driver, with an empty fragment bitmap. */
   private def commitEmptyIndex(
       dataset: Dataset,
-      readOptions: LanceSparkReadOptions,
       indexName: String,
       indexType: IndexType,
       canonicalColumns: Seq[String],
@@ -316,50 +310,9 @@ case class AddIndexExec(
       .train(false)
       .build()
 
-    val emptyIndex = dataset.createIndex(opts)
-
-    val fieldIds = canonicalColumns.map { column =>
-      val field = if (IndexUtils.scalarSegmentIndexType(method).isDefined) {
-        FieldPathUtils.resolveField(dataset.getLanceSchema, column)
-      } else {
-        FieldPathUtils.resolveLeafField(dataset.getLanceSchema, column)
-      }
-      field.getId
-    }.toList
-
-    val indexBuilder = Index
-      .builder()
-      .uuid(uuid)
-      .name(indexName)
-      .fields(fieldIds.map(java.lang.Integer.valueOf).asJava)
-      .datasetVersion(dataset.version())
-      .indexDetails(emptyIndex.indexDetails().orElse(Array.empty[Byte]))
-      .indexVersion(emptyIndex.indexVersion())
-      .indexType(indexType)
-      .fragments(java.util.Collections.emptyList())
-    emptyIndex.createdAt().ifPresent(indexBuilder.createdAt)
-    val index = indexBuilder.build()
-
-    val removedIndices = dataset.getIndexes.asScala
-      .filter(_.name() == indexName)
-      .toList.asJava
-
-    val op = AddIndexOperation.builder()
-      .withNewIndices(Collections.singletonList(index))
-      .withRemovedIndices(removedIndices)
-      .build()
-    val txn = new Transaction.Builder()
-      .readVersion(dataset.version())
-      .operation(op)
-      .build()
-    try {
-      val newDataset = new CommitBuilder(dataset)
-        .writeParams(readOptions.getStorageOptions)
-        .execute(txn)
-      newDataset.close()
-    } finally {
-      txn.close()
-    }
+    // Without fragmentIds, Lance commits createIndex atomically. Do not manually commit the
+    // returned metadata a second time.
+    dataset.createIndex(opts)
 
     Seq(new GenericInternalRow(Array[Any](0L, UTF8String.fromString(indexName))))
   }
