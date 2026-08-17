@@ -39,6 +39,7 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -129,6 +130,12 @@ public class UpdateColumnsBackfillBatchWrite implements BatchWrite {
             .findFirst()
             .orElse(new long[0]);
 
+    Map<Long, byte[]> mergedUpdatedFragmentOffsets = new HashMap<>();
+    Arrays.stream(messages)
+        .map(m -> (TaskCommit) m)
+        .map(TaskCommit::getUpdatedFragmentOffsets)
+        .forEach(m -> m.forEach(mergedUpdatedFragmentOffsets::put));
+
     if (updatedFragments.isEmpty()) {
       logger.info("No updated fragments to commit.");
       return;
@@ -145,12 +152,14 @@ public class UpdateColumnsBackfillBatchWrite implements BatchWrite {
           .map(Fragment::metadata)
           .forEach(updatedFragments::add);
 
-      // Commit update operation using CommitBuilder
+      // Commit update operation using CommitBuilder. Pass matched physical row offsets per
+      // fragment so Lance can partially refresh _row_last_updated_at_version (stable row IDs).
       Update update =
           Update.builder()
               .updatedFragments(updatedFragments)
               .fieldsModified(fieldsModified)
               .updateMode(Optional.of(Update.UpdateMode.RewriteColumns))
+              .updatedFragmentOffsets(mergedUpdatedFragmentOffsets)
               .build();
       long version =
           Objects.requireNonNull(
@@ -175,6 +184,7 @@ public class UpdateColumnsBackfillBatchWrite implements BatchWrite {
 
   public static class UpdateColumnsWriter extends AbstractBackfillWriter {
     private final List<FragmentMetadata> updatedFragments = new ArrayList<>();
+    private final Map<Long, byte[]> updatedFragmentOffsets = new HashMap<>();
     private long[] fieldsModified;
 
     public UpdateColumnsWriter(
@@ -204,11 +214,15 @@ public class UpdateColumnsBackfillBatchWrite implements BatchWrite {
               LanceDataset.ROW_ADDRESS_COLUMN.name());
       updatedFragments.add(result.getUpdatedFragment());
       fieldsModified = result.getFieldsModified();
+      byte[] rowOffsetBytes = result.getUpdatedRowOffsetBytes();
+      if (rowOffsetBytes != null && rowOffsetBytes.length > 0) {
+        updatedFragmentOffsets.put((long) fragment.getId(), rowOffsetBytes);
+      }
     }
 
     @Override
     protected WriterCommitMessage buildCommitMessage() {
-      return new TaskCommit(updatedFragments, fieldsModified);
+      return new TaskCommit(updatedFragments, fieldsModified, updatedFragmentOffsets);
     }
   }
 
@@ -275,10 +289,16 @@ public class UpdateColumnsBackfillBatchWrite implements BatchWrite {
   public static class TaskCommit implements WriterCommitMessage {
     private final List<FragmentMetadata> updatedFragments;
     private final long[] fieldsModified;
+    private final Map<Long, byte[]> updatedFragmentOffsets;
 
-    TaskCommit(List<FragmentMetadata> updatedFragments, long[] fieldsModified) {
+    TaskCommit(
+        List<FragmentMetadata> updatedFragments,
+        long[] fieldsModified,
+        Map<Long, byte[]> updatedFragmentOffsets) {
       this.updatedFragments = updatedFragments;
       this.fieldsModified = fieldsModified;
+      this.updatedFragmentOffsets =
+          updatedFragmentOffsets != null ? updatedFragmentOffsets : Collections.emptyMap();
     }
 
     List<FragmentMetadata> getUpdatedFragments() {
@@ -287,6 +307,10 @@ public class UpdateColumnsBackfillBatchWrite implements BatchWrite {
 
     long[] getFieldsModified() {
       return fieldsModified;
+    }
+
+    Map<Long, byte[]> getUpdatedFragmentOffsets() {
+      return updatedFragmentOffsets;
     }
   }
 }
