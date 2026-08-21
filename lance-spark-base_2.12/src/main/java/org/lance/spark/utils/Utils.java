@@ -15,6 +15,7 @@ package org.lance.spark.utils;
 
 import org.lance.Dataset;
 import org.lance.ReadOptions;
+import org.lance.Ref;
 import org.lance.Version;
 import org.lance.namespace.LanceNamespace;
 import org.lance.spark.LanceRef;
@@ -129,35 +130,63 @@ public class Utils {
     }
 
     public Dataset build() {
+      if (ref != null && (ref.getTagName().isPresent() || ref.getBranchName().isPresent())) {
+        // Open specific tag or branch/version
+        Dataset main = openMain(null);
+        try {
+          if (ref.getTagName().isPresent()) {
+            return main.checkout(Ref.ofTag(ref.getTagName().get()));
+          } else {
+            return ref.getVersionNumber().isPresent()
+                ? main.checkout(
+                    Ref.ofBranch(ref.getBranchName().get(), ref.getVersionNumber().get()))
+                : main.checkout(Ref.ofBranch(ref.getBranchName().get()));
+          }
+        } finally {
+          main.close();
+        }
+      } else {
+        return openMain(
+            ref != null && ref.getVersionNumber().isPresent()
+                ? ref.getVersionNumber().get()
+                : null);
+      }
+    }
+
+    private Dataset openMain(Long version) {
       LanceRuntime.enableOpenTelemetry();
 
       Map<String, String> base = storageOptions != null ? storageOptions : Collections.emptyMap();
       Map<String, String> merged = LanceRuntime.mergeStorageOptions(base, initialStorageOptions);
 
-      ReadOptions.Builder roBuilder =
+      ReadOptions.Builder builder =
           new ReadOptions.Builder()
               .setStorageOptions(merged)
               .setSession(
                   LanceRuntime.session(catalogName, indexCacheBackend, metadataCacheBackend));
-      if (ref != null) {
-        ref.getVersionNumber().ifPresent(roBuilder::setVersion);
+      if (version != null) {
+        builder.setVersion(version);
       }
       if (blockSize != null) {
-        roBuilder.setBlockSize(blockSize);
+        builder.setBlockSize(blockSize);
       }
       if (indexCacheSize != null) {
-        roBuilder.setIndexCacheSize(indexCacheSize);
+        builder.setIndexCacheSize(indexCacheSize);
       }
       if (metadataCacheSize != null) {
-        roBuilder.setMetadataCacheSize(metadataCacheSize);
+        builder.setMetadataCacheSize(metadataCacheSize);
       }
 
+      return open(builder.build());
+    }
+
+    private Dataset open(ReadOptions readOptions) {
       if (namespace != null && tableId != null) {
         return Dataset.open()
             .allocator(LanceRuntime.allocator())
             .namespaceClient(namespace)
             .tableId(tableId)
-            .readOptions(roBuilder.build())
+            .readOptions(readOptions)
             .build();
       }
       if (runtimeNamespaceImpl != null) {
@@ -169,14 +198,14 @@ public class Utils {
               .allocator(LanceRuntime.allocator())
               .namespaceClient(runtimeNamespace)
               .tableId(effectiveTableId)
-              .readOptions(roBuilder.build())
+              .readOptions(readOptions)
               .build();
         }
       }
       return Dataset.open()
           .allocator(LanceRuntime.allocator())
           .uri(uri)
-          .readOptions(roBuilder.build())
+          .readOptions(readOptions)
           .build();
     }
   }

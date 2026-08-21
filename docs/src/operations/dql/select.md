@@ -199,6 +199,46 @@ Use `VERSION AS OF` to query a specific version of the table:
     df.show();
     ```
 
+### Query by Tag
+
+Use `VERSION AS OF` with a quoted tag name to query the snapshot referenced by a tag:
+
+=== "SQL"
+    ```sql
+    -- Query the snapshot referenced by the release_candidate tag
+    SELECT * FROM users VERSION AS OF 'release_candidate';
+
+    -- Query specific columns from a tagged snapshot
+    SELECT id, name FROM users VERSION AS OF 'v1.0';
+    ```
+
+=== "Python"
+    ```python
+    # Query a tag using SQL
+    spark.sql("SELECT * FROM users VERSION AS OF 'release_candidate'").show()
+    ```
+
+=== "Scala"
+    ```scala
+    // Query a tag using SQL
+    spark.sql("SELECT * FROM users VERSION AS OF 'release_candidate'").show()
+    ```
+
+=== "Java"
+    ```java
+    // Query a tag using SQL
+    spark.sql("SELECT * FROM users VERSION AS OF 'release_candidate'").show();
+    ```
+
+!!! note
+    Tags whose names consist entirely of integer digits cannot be queried. Numeric values are
+    interpreted as table versions, even when quoted. For example, both `VERSION AS OF 123` and
+    `VERSION AS OF '123'` query table version 123 rather than a tag named `123`. Use a tag name that
+    contains at least one non-digit character.
+
+Tag queries are read-only. `UPDATE`, `DELETE`, `INSERT`, `MERGE INTO`, `ADD COLUMNS`, and
+`UPDATE COLUMNS` operations cannot target a tagged snapshot.
+
 ### Query by Timestamp
 
 Use `TIMESTAMP AS OF` to query the table as it existed at a specific point in time:

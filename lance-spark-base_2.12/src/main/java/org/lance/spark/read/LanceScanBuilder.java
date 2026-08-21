@@ -176,9 +176,7 @@ public class LanceScanBuilder
       // partition). A full-text query without a namespace, or against a catalog-only namespace such
       // as Glue that does not implement queryTable, falls through to the local per-fragment scan
       // below. COUNT(*) is excluded because countTableRows has no full-text field.
-      if (readOptions.getFullTextQuery() != null
-          && LanceRuntime.supportsQueryTable(namespaceImpl)
-          && !pushedAggregation.isPresent()) {
+      if (shouldNamespaceFtsScan()) {
         return buildNamespaceFtsScan();
       }
 
@@ -268,9 +266,8 @@ public class LanceScanBuilder
       // the resolved version onto the read options shipped to workers, providing snapshot
       // isolation across all tasks of this query. The version is kept as a long end-to-end so
       // long-lived high-write-frequency datasets do not silently truncate to a wrong version.
-      LanceSplit.ScanPlanResult scanPlan = LanceSplit.planScan(dataset);
-      LanceSparkReadOptions resolvedReadOptions =
-          readOptions.withRef(LanceRef.ofMain(scanPlan.getResolvedVersion()));
+      LanceSplit.ScanPlanResult scanPlan = LanceSplit.planScan(dataset, readOptions);
+      LanceSparkReadOptions resolvedReadOptions = readOptions.withRef(scanPlan.getRef());
 
       Optional<String> whereCondition =
           FilterPushDown.compileFiltersToSqlWhereClause(pushedPredicates);
@@ -296,6 +293,19 @@ public class LanceScanBuilder
     } finally {
       closeLazyDataset();
     }
+  }
+
+  boolean shouldNamespaceFtsScan() {
+    LanceRef ref = readOptions.getRef();
+    boolean hasTag = ref != null && ref.getTagName().isPresent();
+    if (hasTag) {
+      return false;
+    }
+
+    return readOptions.getFullTextQuery() != null
+        && LanceRuntime.supportsQueryTable(namespaceImpl)
+        && !pushedAggregation.isPresent()
+        && !hasTag;
   }
 
   /**

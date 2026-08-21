@@ -15,6 +15,8 @@ package org.lance.spark.read;
 
 import org.lance.Dataset;
 import org.lance.Fragment;
+import org.lance.Tag;
+import org.lance.spark.LanceRef;
 import org.lance.spark.LanceSparkReadOptions;
 import org.lance.spark.utils.Utils;
 
@@ -24,6 +26,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 public class LanceSplit implements Serializable {
   private static final long serialVersionUID = 2983749283749283749L;
@@ -41,15 +44,15 @@ public class LanceSplit implements Serializable {
   /** Result of scan planning containing splits, resolved version, and per-fragment row counts. */
   public static class ScanPlanResult {
     private final List<LanceSplit> splits;
-    private final long resolvedVersion;
+    private final LanceRef ref;
 
     /** Per-fragment logical row counts (after deletions). Key is fragment ID. */
     private final Map<Integer, Long> fragmentRowCounts;
 
     public ScanPlanResult(
-        List<LanceSplit> splits, long resolvedVersion, Map<Integer, Long> fragmentRowCounts) {
+        List<LanceSplit> splits, LanceRef ref, Map<Integer, Long> fragmentRowCounts) {
       this.splits = splits;
-      this.resolvedVersion = resolvedVersion;
+      this.ref = ref;
       this.fragmentRowCounts = fragmentRowCounts;
     }
 
@@ -57,8 +60,8 @@ public class LanceSplit implements Serializable {
       return splits;
     }
 
-    public long getResolvedVersion() {
-      return resolvedVersion;
+    public LanceRef getRef() {
+      return ref;
     }
 
     public Map<Integer, Long> getFragmentRowCounts() {
@@ -75,7 +78,7 @@ public class LanceSplit implements Serializable {
    */
   public static ScanPlanResult planScan(LanceSparkReadOptions readOptions) {
     try (Dataset dataset = Utils.openDatasetBuilder(readOptions).build()) {
-      return planScan(dataset);
+      return planScan(dataset, readOptions);
     }
   }
 
@@ -88,7 +91,7 @@ public class LanceSplit implements Serializable {
    *
    * <p>The caller retains ownership of the dataset; this method does not close it.
    */
-  public static ScanPlanResult planScan(Dataset dataset) {
+  public static ScanPlanResult planScan(Dataset dataset, LanceSparkReadOptions readOptions) {
     List<Fragment> fragments = dataset.getFragments();
     List<LanceSplit> splits = new ArrayList<>(fragments.size());
     Map<Integer, Long> fragmentRowCounts = new HashMap<>(fragments.size());
@@ -97,8 +100,32 @@ public class LanceSplit implements Serializable {
       splits.add(new LanceSplit(Collections.singletonList(id)));
       fragmentRowCounts.put(id, fragment.metadata().getNumRows());
     }
-    long resolvedVersion = dataset.getVersion().getId();
-    return new ScanPlanResult(splits, resolvedVersion, fragmentRowCounts);
+
+    LanceRef plannedRef;
+
+    LanceRef ref = readOptions.getRef();
+    if (ref != null && ref.getBranchName().isPresent()) {
+      plannedRef = LanceRef.ofBranch(ref.getBranchName().get(), dataset.getVersion().getId());
+    } else if (ref != null && ref.getTagName().isPresent()) {
+      Optional<Tag> tag =
+          dataset.tags().list().stream()
+              .filter(t -> t.getName().equals(ref.getTagName().get()))
+              .findFirst();
+      if (tag.isEmpty()) {
+        throw new RuntimeException("No existed tag with name:" + ref.getTagName().get());
+      }
+
+      Optional<String> tagBranch = tag.get().getBranch();
+      if (tagBranch.isEmpty()) {
+        plannedRef = LanceRef.ofMain(dataset.getVersion().getId());
+      } else {
+        plannedRef = LanceRef.ofBranch(tagBranch.get(), dataset.version());
+      }
+    } else {
+      plannedRef = LanceRef.ofMain(dataset.getVersion().getId());
+    }
+
+    return new ScanPlanResult(splits, plannedRef, fragmentRowCounts);
   }
 
   /**
