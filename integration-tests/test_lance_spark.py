@@ -2443,9 +2443,86 @@ class TestDMLAddColumn:
         assert result[1].total_compensation == 69000   # 60000 + 9000
         assert result[2].total_compensation == 84000   # 70000 + 14000
 
+    @pytest.mark.requires_rest
+    @pytest.mark.rest_dir_compatible
+    def test_add_column_from_view_on_rest(self, spark, test_table):
+        spark.sql(f"""
+            CREATE TABLE {test_table} (
+                id INT,
+                name STRING
+            )
+        """)
+
+        spark.sql(f"""
+            INSERT INTO {test_table} VALUES
+            (1, 'alpha'),
+            (2, 'bravo')
+        """)
+
+        spark.sql(f"""
+            CREATE OR REPLACE TEMPORARY VIEW namespace_add_columns_view AS
+            SELECT _rowaddr, _fragid, name AS name_copy
+            FROM {test_table}
+        """)
+
+        spark.sql(f"""
+            ALTER TABLE {test_table} ADD COLUMNS name_copy FROM namespace_add_columns_view
+        """)
+
+        rows = spark.sql(f"""
+            SELECT id, name, name_copy
+            FROM {test_table}
+            ORDER BY id
+        """).collect()
+
+        assert [(row.id, row.name, row.name_copy) for row in rows] == [
+            (1, "alpha", "alpha"),
+            (2, "bravo", "bravo"),
+        ]
+
 
 class TestDMLUpdateColumn:
     """Test DML UPDATE COLUMNS FROM operations for updating existing columns via backfill."""
+
+    @pytest.mark.requires_rest
+    @pytest.mark.rest_dir_compatible
+    def test_update_column_from_view_on_rest(self, spark, test_table):
+        spark.sql(f"""
+            CREATE TABLE {test_table} (
+                id INT,
+                name STRING,
+                value INT
+            )
+        """)
+
+        spark.sql(f"""
+            INSERT INTO {test_table} VALUES
+            (1, 'alpha', 10),
+            (2, 'bravo', 20)
+        """)
+
+        spark.sql(f"""
+            CREATE OR REPLACE TEMPORARY VIEW namespace_update_columns_view AS
+            SELECT _rowaddr, _fragid, value * 10 AS value
+            FROM {test_table}
+            WHERE id = 2
+        """)
+
+        spark.sql(f"""
+            ALTER TABLE {test_table}
+            UPDATE COLUMNS value FROM namespace_update_columns_view
+        """)
+
+        rows = spark.sql(f"""
+            SELECT id, name, value
+            FROM {test_table}
+            ORDER BY id
+        """).collect()
+
+        assert [(row.id, row.name, row.value) for row in rows] == [
+            (1, "alpha", 10),
+            (2, "bravo", 200),
+        ]
 
     def test_update_single_column(self, spark):
         """Test ALTER TABLE UPDATE COLUMNS FROM with a single column."""
